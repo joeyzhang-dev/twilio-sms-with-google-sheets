@@ -1,0 +1,585 @@
+<!doctype html>
+<!--
+  SMS Composer Sidebar
+
+  Overview
+  This HTML file renders the SMS composer UI inside the Google Sheets sidebar.
+  It includes a small client-side preview engine that mirrors server rendering,
+  audience estimation, and a confirmation modal prior to sending.
+
+  Section Index
+   1) CSS: Design tokens, base, components, modal, sent screen
+   2) Body: Gate (passcode), App (composer), Sent screen
+   3) Script: Constants, GSM helpers, preview rendering, audience/loaders,
+              preview update, confirm & send, sent screen helpers, gate control,
+              initialization and onload
+-->
+<html>
+<head>
+  <base target="_top">
+  <style>
+    /* ================================
+       1) CSS — Design tokens & base
+       ================================ */
+    :root{
+      --bg:#0b1220; --ink:#e8eefc; --muted:#9bb0de; --border:#1f2a44;
+      --accent:#5b8cff; --accent-ghost:#15244d; --success:#12b886;
+      --warn:#f59f00; --danger:#fa5252; --chip:#243155;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0; padding:12px;
+      font:14px/1.45 Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color:var(--ink); background:#0a0f1a;
+    }
+    h3{ margin:0 0 12px; font-weight:700; letter-spacing:.2px; }
+    
+    /* ================================
+       Layout and components
+       ================================ */
+    .bar{
+      background:linear-gradient(90deg,#0e1830, #0a1230);
+      border:1px solid var(--border); border-radius:12px;
+      padding:10px 12px; display:flex; align-items:center; gap:8px; margin-bottom:12px;
+    }
+    .dot{ width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px var(--accent-ghost); }
+    #status{ color:var(--muted); flex:1; }
+    .grid{ display:grid; gap:12px; }
+    .card{ background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px; }
+    .row{ display:grid; gap:8px; grid-template-columns: 1fr; }
+    label{ font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.3px; }
+    select, textarea, input[type="text"], input[type="password"]{
+      width:100%; border:1px solid var(--border); background:#0a1020; color:var(--ink);
+      border-radius:10px; padding:8px 10px; outline:none;
+    }
+    select:focus, textarea:focus, input:focus{ border-color:var(--accent); box-shadow:0 0 0 3px #15244d; }
+    .chips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+    .chip{ background:var(--chip); color:var(--ink); border:1px solid var(--border); border-radius:999px; font-size:12px; padding:4px 8px; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .preview{ white-space:pre-wrap; background:#0a0f1a; border:1px dashed var(--border); padding:10px; border-radius:10px; min-height:90px; }
+    .preview .linebreak{ color:#1d9bf0; background:#0b2040; font-size:11px; font-family:monospace; padding:0 3px; border-radius:3px; }
+    .toolbar{ display:flex; gap:8px; justify-content:flex-end; align-items:center; }
+    .btn{ border:1px solid var(--border); background:#0b1428; color:var(--ink); padding:8px 12px; border-radius:10px; cursor:pointer; }
+    .btn:hover{ border-color:#2b3a66; }
+    .btn.primary{ background:var(--accent); border-color:transparent; color:white; font-weight:600; }
+    .btn.primary:disabled{ opacity:.6; cursor:not-allowed; }
+    .btn.ghost{ background:transparent; }
+    .right{ text-align:right; }
+    .meta{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+    .badge{ background:#0a1020; border:1px solid var(--border); padding:3px 8px; border-radius:999px; }
+    .badge.ok{ border-color:#163f35; background:#0b241f; color:#8ff0c6; }
+    .badge.warn{ border-color:#453405; background:#2b1f05; color:#ffd479; }
+    .badge.danger{ border-color:#4a0e12; background:#2a0b0e; color:#ffb3b3; }
+
+    /* ================================
+       Modal
+       ================================ */
+    .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; }
+    .modal{
+      position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+      width:min(520px, calc(100vw - 28px));
+      background:#0a0f1a; border:1px solid var(--border); border-radius:14px; padding:14px;
+      display:none;
+    }
+    .modal h4{ margin:0 0 8px; }
+    .modal .section{ border-top:1px solid var(--border); padding-top:10px; margin-top:8px; }
+    .modal .actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+
+    /* ================================
+       Sent screen
+       ================================ */
+  #sent { display:none; }
+
+  .sentWrap{
+    display:flex; gap:16px; align-items:flex-start; margin-top:8px;
+  }
+  .sentMeta{
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .sentMeta .badge{ background:#0a1020; border:1px solid var(--border); padding:4px 10px; border-radius:999px; }
+
+  .phone{
+    width:320px; background:#0a0f1a; border:1px solid var(--border);
+    border-radius:24px; padding:14px; position:relative;
+    box-shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  .screen{
+    background:#0c1324; border-radius:16px; padding:12px; min-height:200px;
+  }
+  .bubble{
+    max-width:85%; background:#15315e; color:#eaf0ff; border:1px solid #2a4a8c;
+    border-radius:14px; padding:10px 12px; white-space:pre-wrap;
+    line-height:1.4;
+  }
+  .bubble .linebreak{
+    color:#1d9bf0; background:#0b2040; font-size:11px; font-family:monospace;
+    padding:0 3px; border-radius:3px;
+  }
+  .tick{
+    display:inline-flex; align-items:center; gap:6px; color:#8ff0c6; font-weight:600;
+  }
+  .tick svg{ width:18px; height:18px; }
+  .sentBtns{ margin-top:12px; display:flex; gap:8px; }
+  </style>
+</head>
+<body>
+
+  <!-- ================================
+       2) BODY — Gate (passcode)
+       Visible only when a passcode is required
+       ================================ -->
+  <div id="gate" style="display:none;">
+    <div class="card">
+      <label>Enter passcode</label>
+      <input type="password" id="pass" placeholder="Passcode">
+      <div class="toolbar">
+        <button class="btn primary" id="passBtn">Unlock</button>
+      </div>
+      <div class="meta"><span id="passMsg">Protected panel</span></div>
+    </div>
+  </div>
+
+  <!-- ================================
+       BODY — App (composer)
+       Hidden until unlocked
+       ================================ -->
+  <div id="app" style="display:none;">
+    
+    <div class="bar">
+      <span class="dot"></span>
+      <div id="status">Ready</div>
+      <div class="chips">
+        <span id="audienceChip" class="chip">Recipients: <span id="recipients">0</span></span>
+        <span id="lengthChip" class="chip">Chars: <span id="chars">0</span></span>
+        <span id="segmentsChip" class="chip">Segments: <span id="segments">0</span></span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- Event & audience -->
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>Event</label>
+            <select id="event"></select>
+          </div>
+          <div>
+            <label>Audience</label>
+            <select id="audience">
+              <option value="attendees">Attendees of selected event (opted-in)</option>
+              <option value="alloptedin">All opted-in members</option>
+            </select>
+            <div class="meta">
+              <span class="badge" id="eventMetaTitle">Title: —</span>
+              <span class="badge" id="eventMetaDate">Date: —</span>
+              <span class="badge" id="eventMetaLoc">Location: —</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Template & message -->
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>Template</label>
+            <select id="template"></select>
+          </div>
+          <div>
+            <label>Message <span class="mono muted">(supports {title}, {date}, {location}, {firstName}, {footer})</span></label>
+            <textarea id="body" placeholder="Write your message. Use Enter to add line breaks."></textarea>
+          </div>
+          <div>
+            <label>Preview</label>
+            <div class="preview" id="preview"></div>
+            <div class="right muted" style="margin-top:6px;">
+              <span id="charWarn" class="badge warn" style="display:none;">Long message → multiple segments</span>
+            </div>
+          </div>
+          <div class="toolbar">
+            <button class="btn ghost" id="refreshBtn">Refresh</button>
+            <button class="btn primary" id="openConfirmBtn">Review & Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirmation modal -->
+    <div class="overlay" id="overlay"></div>
+    <div class="modal" id="confirmModal">
+      <h4>Confirm SMS Send</h4>
+      <div class="section">
+        <div class="meta">
+          <span class="badge">Event ID: <span id="c_eventId">—</span></span>
+          <span class="badge">Title: <span id="c_title">—</span></span>
+          <span class="badge">Date: <span id="c_date">—</span></span>
+          <span class="badge">Location: <span id="c_loc">—</span></span>
+        </div>
+      </div>
+      <div class="section">
+        <div class="meta">
+          <span class="badge">Audience: <span id="c_audience">—</span></span>
+          <span class="badge ok">Recipients: <span id="c_recipients">0</span></span>
+          <span class="badge">Chars: <span id="c_chars">0</span></span>
+          <span class="badge">Segments: <span id="c_segments">0</span></span>
+        </div>
+      </div>
+      <div class="section">
+        <label>Final message</label>
+        <div class="preview" id="c_preview"></div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="cancelBtn">Cancel</button>
+        <button class="btn primary" id="sendBtn">Send</button>
+      </div>
+    </div>
+  </div>
+
+<!-- ================================
+     BODY — Sent screen
+     ================================ -->
+<div id="sent">
+  <div class="card">
+    <div class="tick">
+      <!-- check icon -->
+      <svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Message sent
+    </div>
+    <div class="sentWrap">
+      <div class="phone">
+        <div class="screen">
+          <div class="bubble" id="sentBubble"></div>
+        </div>
+      </div>
+      <div class="sentMeta">
+        <span class="badge">Event: <span id="sentEvent">—</span></span>
+        <span class="badge">Audience: <span id="sentAudience">—</span></span>
+        <span class="badge ok">Recipients: <span id="sentCount">0</span></span>
+        <span class="badge">Segments: <span id="sentSegs">0</span></span>
+      </div>
+    </div>
+    <div class="sentBtns">
+      <button class="btn" id="sentBack">Send another</button>
+      <button class="btn ghost" id="sentClose">Close</button>
+    </div>
+  </div>
+</div>
+
+  <script>
+    // ================================
+    // 3) SCRIPT — Constants
+    // ================================
+    const $ = id => document.getElementById(id);
+    const DEBOUNCE_MS = 120;
+    const SHOW_LINEBREAK_ICON = true;
+
+    let templates = [];
+    let events = [];
+    let debounceTimer = null;
+    let audienceSeq = 0;
+    let latestRendered = '';
+
+    // ================================
+    // GSM helpers (segment calculation)
+    // ================================
+    const GSM_CHARS =
+      "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\u0020!\"#¤%&'()*+,-./0123456789:;<=>?"+
+      "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+    const GSM_EXT = "^{}\\[~]|€";
+    const isGsmChar = ch => GSM_CHARS.includes(ch) || GSM_EXT.includes(ch);
+    const isGsmText = s => [...s].every(isGsmChar);
+    function segmentCount(s){
+      if (!s) return 0;
+      const gsm = isGsmText(s);
+      const single = gsm ? 160 : 70;
+      const multi  = gsm ? 153 : 67;
+      const len = s.length;
+      return len <= single ? 1 : Math.ceil(len / multi);
+    }
+
+    // ================================
+    // Client preview (mirrors server)
+    // ================================
+    function renderPreviewLocal(body, ev) {
+      const footer = ' Reply STOP to opt out. HELP for help.';
+      const ctx = {
+        title: (ev?.title || '').trim(),
+        date: (ev?.date || '').trim(),
+        location: (ev?.location || '').trim(),
+        footer
+      };
+      let out = String(body || '').replace(/\r\n/g, '\n').trim();
+      out = out
+        .replace(/\{title\}/g, '<<TITLE>>')
+        .replace(/\{date\}/g, '<<DATE>>')
+        .replace(/\{location\}/g, '<<LOCATION>>')
+        .replace(/\{footer\}/g, '<<FOOTER>>');
+      out = out.replace(/\{(\w+)\?\s*([^}]*)\}/g, (_, key, seg) => (ctx[key] ? seg : ''));
+      out = out
+        .replace(/<<TITLE>>/g, ctx.title)
+        .replace(/<<DATE>>/g,  ctx.date)
+        .replace(/<<LOCATION>>/g, ctx.location)
+        .replace(/<<FOOTER>>/g, ctx.footer)
+        .replace(/[^\S\n]+/g, ' ')
+        .replace(/[ \t]+([!?.,;:])/g, '$1')
+        .split('\n').map(l => l.replace(/^[ \t]+|[ \t]+$/g, '')).join('\n')
+        .trim();
+      return out;
+    }
+
+    function getSelectedEvent(){
+      const id = $('event').value || '';
+      return events.find(e => String(e.id) === String(id)) || { id, title:'', date:'', location:'' };
+    }
+
+    // ================================
+    // Audience count (estimation)
+    // ================================
+function updateAudience(){
+  const eventId = $('event').value || '';
+  const audienceKey = $('audience').value || 'attendees';
+  const mySeq = ++audienceSeq;
+
+  google.script.run
+    .withSuccessHandler(info => {
+  const n = info && typeof info.count === 'number' ? info.count : 0;
+  $('recipients').textContent = n;
+  $('audienceChip').className = 'chip' + (n ? '' : ' danger');
+  $('status').textContent = 'Ready';
+})
+    .withFailureHandler(err => {
+      const msg = (err && err.message) ? err.message : String(err);
+      $('recipients').textContent = '–';
+      $('audienceChip').className = 'chip danger';
+      $('status').textContent = 'Audience error: ' + msg;
+      if (/Passcode required/i.test(msg)) { showGate(); }
+    })
+    .uiGetAudienceInfo(eventId, audienceKey);
+}
+
+
+    // ================================
+    // Preview + metrics update
+    // ================================
+    function updatePreview(){
+      const body = $('body').value || '';
+      const ev = getSelectedEvent();
+
+      $('eventMetaTitle').textContent = 'Title: ' + (ev.title || '—');
+      $('eventMetaDate').textContent  = 'Date: ' + (ev.date || '—');
+      $('eventMetaLoc').textContent   = 'Location: ' + (ev.location || '—');
+
+      const rendered = renderPreviewLocal(body, ev);
+      latestRendered = rendered;
+
+      $('chars').textContent = String(rendered.length);
+      const segs = segmentCount(rendered);
+      $('segments').textContent = String(segs);
+      $('charWarn').style.display = segs > 1 ? '' : 'none';
+      $('segmentsChip').className = 'chip' + (segs > 1 ? ' warn' : '');
+
+      $('preview').innerHTML = SHOW_LINEBREAK_ICON
+        ? rendered.replace(/\n/g, '<span class="linebreak">⏎</span>\n')
+        : rendered;
+
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(updateAudience, 200);
+      $('status').textContent = 'Ready';
+    }
+
+    // ================================
+    // Confirm + send
+    // ================================
+    function openConfirm(){
+      const ev = getSelectedEvent();
+      $('c_eventId').textContent = String(ev.id || '—');
+      $('c_title').textContent   = String(ev.title || '—');
+      $('c_date').textContent    = String(ev.date || '—');
+      $('c_loc').textContent     = String(ev.location || '—');
+      $('c_audience').textContent= $('audience').value === 'attendees' ? 'Attendees of event' : 'All opted-in';
+      $('c_chars').textContent   = String(latestRendered.length);
+      $('c_segments').textContent= String(segmentCount(latestRendered));
+      $('c_preview').textContent = latestRendered;
+      $('overlay').style.display = 'block';
+      $('confirmModal').style.display = 'block';
+    }
+    function closeConfirm(){ $('overlay').style.display = 'none'; $('confirmModal').style.display = 'none'; }
+    function sendNow(){
+      $('sendBtn').disabled = true;
+      $('status').textContent = 'Sending…';
+      google.script.run
+        .withSuccessHandler(res => {
+          const sent = (res && res.sent) || 0;
+          $('status').textContent = `Sent ${sent} messages.`;
+          $('sendBtn').disabled = false;
+          closeConfirm();
+
+          const audienceLabel = ($('audience').value === 'attendees')
+            ? 'Attendees of event'
+            : 'All opted-in';
+
+          // Show the sent page with the exact rendered message
+          showSent(latestRendered, sent, audienceLabel);
+        })
+        .withFailureHandler(err => {
+          $('status').textContent = 'Send error: ' + (err && err.message ? err.message : err);
+          $('sendBtn').disabled = false;
+        })
+        .uiSend({ eventId: $('event').value || '', audienceKey: $('audience').value || 'attendees', body: $('body').value || '' });
+    }
+
+    // ================================
+    // Sent screen helpers
+    // ================================
+function showSent(message, sentCount, audienceLabel){
+  // message already rendered in latestRendered
+  const segs = segmentCount(message);
+
+  // Reuse linebreak markers for display
+  const html = message.replace(/\n/g, '<span class="linebreak">⏎</span>\n');
+  document.getElementById('sentBubble').innerHTML = html;
+
+  // meta
+  const ev = getSelectedEvent();
+  document.getElementById('sentEvent').textContent =
+    `${ev.id || '—'} — ${ev.title || '—'}`;
+  document.getElementById('sentAudience').textContent = audienceLabel || '—';
+  document.getElementById('sentCount').textContent = String(sentCount || 0);
+  document.getElementById('sentSegs').textContent  = String(segs);
+
+  // toggle screens
+  document.getElementById('app').style.display  = 'none';
+  document.getElementById('sent').style.display = 'block';
+}
+
+function backToComposer(){
+  document.getElementById('sent').style.display = 'none';
+  document.getElementById('app').style.display  = 'block';
+}
+
+    // ================================
+    // Data loaders (templates, events)
+    // ================================
+function loadTemplates(){
+  google.script.run
+    .withSuccessHandler(tpls => {
+  templates = tpls || [];
+  const sel = $('template');
+  sel.innerHTML = '';
+  templates.forEach(t => {
+    const o = document.createElement('option');
+    o.value = t.key; 
+    o.textContent = t.label;
+    sel.appendChild(o);
+  });
+  if (templates.length) {
+    sel.value = templates[0].key;
+    setTemplateFromDropdown();   // seeds textarea + preview
+  } else {
+    updatePreview();             // still render whatever is in the box
+  }
+  $('status').textContent = 'Ready';
+})
+    .withFailureHandler(err => {
+      const msg = (err && err.message) ? err.message : String(err);
+      $('status').textContent = 'Templates error: ' + msg;
+      if (/Passcode required/i.test(msg)) { showGate(); }
+    })
+    .uiGetTemplates();
+}
+function loadEvents(){
+  google.script.run
+    .withSuccessHandler(evts => {
+  events = evts || [];
+  const sel = $('event');
+  sel.innerHTML = '';
+  events.forEach(e => {
+    const o = document.createElement('option');
+    o.value = e.id;
+    o.textContent = `${e.id} — ${e.title || '(no title)'}${e.date ? ' — ' + e.date : ''}`;
+    sel.appendChild(o);
+  });
+  updatePreview();   // refresh preview/meta with first event
+  updateAudience();  // and show recipient estimate
+  $('status').textContent = 'Ready';
+})
+    .withFailureHandler(err => {
+      const msg = (err && err.message) ? err.message : String(err);
+      $('status').textContent = 'Events error: ' + msg;
+      if (/Passcode required/i.test(msg)) { showGate(); }
+    })
+    .uiGetEvents();
+}
+
+
+    // ================================
+    // Gate control
+    // ================================
+    function showApp(){ $('gate').style.display='none'; $('app').style.display='block'; }
+    function showGate(){ $('gate').style.display='block'; $('app').style.display='none'; }
+
+    function checkGate() {
+      $('status').textContent = 'Checking access…';
+      google.script.run
+        .withSuccessHandler(needs => {
+          if (needs) {
+            showGate();
+            $('passMsg').textContent = 'SMS panel is locked.';
+            $('pass').focus();
+            $('passBtn').onclick = () => {
+              const code = $('pass').value || '';
+              $('passMsg').textContent = 'Checking…';
+              google.script.run
+                .withSuccessHandler(res => {
+                  if (res && res.ok) {
+                    $('passMsg').textContent = 'Unlocked.';
+                    showApp(); init();
+                  } else {
+                    $('passMsg').textContent = (res && res.msg) || 'Invalid passcode.';
+                  }
+                })
+                .withFailureHandler(err => { $('passMsg').textContent = 'Error: ' + (err && err.message ? err.message : err); })
+                .uiCheckPass(code);
+            };
+          } else {
+            showApp(); init();
+          }
+        })
+        .withFailureHandler(err => { $('status').textContent = 'Auth check error: ' + (err && err.message ? err.message : err); })
+        .uiNeedsPass();
+    }
+
+    // ================================
+    // Initialization and event bindings (after unlock)
+    // ================================
+    function setTemplateFromDropdown(){
+      const key = $('template').value;
+      const t = templates.find(x => x.key === key);
+      if (t) $('body').value = t.body || '';
+      updatePreview();
+    }
+    function init(){
+      $('event').addEventListener('change', updatePreview);
+      $('audience').addEventListener('change', updateAudience);
+      $('template').addEventListener('change', setTemplateFromDropdown);
+      $('body').addEventListener('input', () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(updatePreview, DEBOUNCE_MS);
+      });
+      $('refreshBtn').addEventListener('click', updatePreview);
+      $('openConfirmBtn').addEventListener('click', openConfirm);
+      $('cancelBtn').addEventListener('click', closeConfirm);
+      $('overlay').addEventListener('click', closeConfirm);
+      $('sendBtn').addEventListener('click', sendNow);
+      document.getElementById('sentBack').addEventListener('click', backToComposer);
+      document.getElementById('sentClose').addEventListener('click', backToComposer);
+
+      loadTemplates();
+      loadEvents();
+    }
+
+    // Single onload — gate first, then init
+    window.addEventListener('DOMContentLoaded', checkGate);
+  </script>
+</body>
+</html>
