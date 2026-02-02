@@ -12,7 +12,37 @@ This project provides a complete SMS messaging workflow on top of Google Sheets 
 - Audience targeting for event attendees and for the full opted in member list
 - Rate limiting and dry run mode for safe testing
 - Centralized SMS logging with retry for failed messages
+- **NEW: Production-grade bulk SMS sender** with robust error handling, batch processing, and automatic opt-out management (see below)
 - Minimal setup that stays inside your Google Sheet and Twilio account
+
+### 🆕 Bulk SMS Sender (New Feature)
+
+This project now includes a **production-quality bulk SMS sender** (`smsBulkSend.js`) designed for sending messages to large subscriber lists with enterprise-grade error handling.
+
+**Key Capabilities:**
+- ✅ **Never crashes** - Continues sending even when individual numbers fail
+- ✅ **Error 21610 handling** - Automatically detects and marks opted-out numbers (Twilio STOP/unsubscribe)
+- ✅ **Batch processing** - Handles execution time limits with automatic resume capability
+- ✅ **Dynamic columns** - Finds columns by name, no hard-coded positions
+- ✅ **Rate limiting** - Prevents API throttling
+- ✅ **Comprehensive logging** - Per-row status tracking in the sheet
+
+**Quick Start:**
+1. Create a sheet named `Subscribers` with columns: `phone`, `opt_in`, `message`, `last_sent_at`, `last_error_code`, `last_error_message`, `last_send_status`
+2. Configure Script Properties with Twilio credentials
+3. Run `sendBulkSMS()` or use the menu: **📱 Bulk SMS → Send Bulk SMS**
+
+**Documentation:**
+- 📄 [Quick Start Guide (5 minutes)](docs/QUICK_START.md) - Get running fast
+- 📖 [Complete Setup Guide](docs/BULK_SMS_SETUP.md) - Full documentation
+- 🔧 [Technical Reference](docs/ERROR_HANDLING_TECHNICAL.md) - Implementation details
+
+**What makes it production-ready:**
+- Uses `muteHttpExceptions` to prevent crashes on Twilio errors
+- Robust JSON parsing with fallback error handling
+- Immediate opt-out detection and sheet updates when error 21610 occurs
+- Cursor-based resume for large lists that exceed execution time limits
+- Per-row error tracking without stopping batch execution
 
 ### Demo or Screenshots
 Screenshots are documented in `docs/ASSETS.md` and embedded below for quick reference
@@ -184,6 +214,12 @@ Twilio SMS setup with Google/
   smsInbound.js             Optional inbound webhook for Twilio to receive replies and opt out requests
   smsSend.js                High level features including access control passcode gate templates audience resolution event info lookup and send orchestration
   smsSidebar.html           Sidebar UI for composing previewing confirming and sending messages from inside Google Sheets
+  smsBulkSend.js            NEW: Production-grade bulk SMS sender with robust error handling, batch processing, and automatic opt-out detection
+  docs/
+    QUICK_START.md          5-minute quick start guide for bulk SMS
+    BULK_SMS_SETUP.md       Complete setup and usage guide for bulk SMS
+    ERROR_HANDLING_TECHNICAL.md  Technical implementation details
+    ASSETS.md               Image documentation
 ```
 
 Key modules

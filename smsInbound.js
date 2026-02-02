@@ -1,32 +1,3 @@
-/**
- * Google Apps Script: SMS Inbound Webhook Handler
- * 
- * This script handles incoming SMS messages via Twilio webhooks.
- * It processes STOP/START/HELP commands and updates student opt-in status.
- * 
- * Features:
- * - Webhook endpoint for Twilio SMS delivery status updates
- * - STOP/START command processing for SMS opt-in management
- * - Automatic student database updates based on phone number
- * - Comprehensive logging of all inbound activity
- * 
- * Webhook URL: Deploy as web app and use the URL as your Twilio webhook
- * 
- * @author Your Organization
- * @version 1.0.0
- */
-
-// =============================================================================
-// WEBHOOK ENTRY POINT
-// =============================================================================
-
-/**
- * Main webhook handler for Twilio SMS webhooks
- * Processes incoming SMS messages and delivery status updates
- * 
- * @param {Object} e - Event object containing webhook parameters
- * @returns {GoogleAppsScript.Content.TextOutput} TwiML response
- */
 function doPost(e) {
   const p = (e && e.parameter) ? e.parameter : {};
   const from = String(p.From || '');
@@ -34,108 +5,123 @@ function doPost(e) {
   const status = String(p.MessageStatus || '');
   const sid = String(p.MessageSid || '');
 
-  // Log all incoming webhook data for debugging
+  // Log everything we get (helps confirm Twilio is hitting us)
   logInbound_(from, body, status, sid);
 
-  // Handle delivery status callbacks (delivery events)
+  // Status callbacks (delivery events)
   if (status) {
-    // Already logged above; no additional processing needed
+    // already logged above; nothing else needed
     return twiml_('');
   }
 
-  // Process SMS commands
+  // Twilio sends default replies for STOP/START/HELP on toll-free.
+  // We just update the sheet and return empty.
   const upper = body.toUpperCase();
-  const STOP_WORDS = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
+  const STOP_WORDS = ['STOP','STOPALL','UNSUBSCRIBE','CANCEL','END','QUIT'];
 
-  // Handle opt-out commands
   if (STOP_WORDS.includes(upper)) {
     updateOptInByPhone_(from, 'No', { updateAllMatches: true });
-    return twiml_(''); // Twilio handles STOP responses automatically
+    return twiml_('');
   }
-  
-  // Handle opt-in commands
   if (upper === 'START') {
     updateOptInByPhone_(from, 'Yes', { updateAllMatches: true });
-    return twiml_(''); // Twilio handles START responses automatically
+    return twiml_('');
   }
-  
-  // Handle help requests
   if (upper === 'HELP') {
     // Twilio sends its own HELP text; we stay silent
     return twiml_('');
   }
 
-  // Custom ping command for webhook testing
+  // Custom ping to verify your webhook is responding
   if (upper === 'PING') {
-    return twiml_('PONG');
+    return twiml_('PONG ✅');
   }
 
-  // Default: no reply for unrecognized messages
+  // Default: no reply
   return twiml_('');
 }
 
-// =============================================================================
-// STUDENT DATABASE UPDATES
-// =============================================================================
-
-/**
- * Update SMS Opt-In status by phone number
- * 
- * @param {string} fromNumber - Phone number in E.164 format
- * @param {string} value - New opt-in value ('Yes' or 'No')
- * @param {Object} opts - Options object
- * @param {boolean} opts.updateAllMatches - Whether to update all matching records
- * @returns {boolean} True if any records were updated
- */
+// Update SMS Opt-In by phone. Options: updateAllMatches to handle duplicates.
 function updateOptInByPhone_(fromNumber, value, opts) {
   const ss = SpreadsheetApp.getActive();
   const db = ss.getSheetByName('Student Database');
-  if (!db) return false;
+  if (!db) {
+    logInbound_('SYSTEM', `No Student Database sheet`, '', '');
+    return false;
+  }
 
   const vals = db.getDataRange().getValues();
-  const hdrs = vals[0].map(String);
-  const cPhone = hdrs.indexOf('Phone #');
-  const cOpt = hdrs.indexOf('SMS Opt-In');
-  
-  if (cPhone < 0 || cOpt < 0) return false;
+  if (vals.length < 2) {
+    logInbound_('SYSTEM', `Student Database is empty`, '', '');
+    return false;
+  }
 
-  const want = normalizePhoneDigits_(fromNumber); // Normalize to 10-digit format
+  // Flexible header lookup (case/space tolerant)
+  const headers = vals[0].map(h => String(h || ''));
+  const findCol = (want) => {
+    const target = want.trim().toLowerCase();
+    for (let i = 0; i < headers.length; i++) {
+      const got = headers[i].trim().toLowerCase();
+      if (got === target) return i;
+    }
+    return -1;
+  };
+
+  const cPhone = findCol('phone #');
+  const cOpt   = findCol('sms opt-in');
+
+  if (cPhone < 0 || cOpt < 0) {
+    logInbound_('SYSTEM',
+      `Missing headers. Found phone=${cPhone}, opt=${cOpt}. Expected "Phone #" & "SMS Opt-In".`,
+      '', ''
+    );
+    return false;
+  }
+
+  const want = normalizePhoneDigits_(fromNumber); // e.g. 8162379012
+  if (!want) {
+    logInbound_('SYSTEM', `Invalid inbound From: ${fromNumber}`, '', '');
+    return false;
+  }
+
   let changed = false;
+  const updateAll = !!(opts && opts.updateAllMatches);
+  let matches = 0;
 
   for (let r = 1; r < vals.length; r++) {
     const have = normalizePhoneDigits_(vals[r][cPhone]);
     if (have && have === want) {
-      db.getRange(r + 1, cOpt + 1).setValue(value);
-      changed = true;
-      if (!(opts && opts.updateAllMatches)) break; // Stop at first unless asked to update all
+      matches++;
+      try {
+        db.getRange(r + 1, cOpt + 1).setValue(value);
+        changed = true;
+      } catch (err) {
+        // Protection or write error: log it so you know
+        logInbound_('SYSTEM',
+          `WRITE FAIL for row ${r+1} phone=${have} -> ${value}: ${err}`,
+          '', ''
+        );
+      }
+      if (!updateAll) break;
     }
   }
+
+  if (!matches) {
+    logInbound_('SYSTEM', `STOP/START: no row matched phone=${want}`, '', '');
+  } else if (changed) {
+    logInbound_('SYSTEM', `STOP/START: updated ${updateAll ? matches : 1} row(s) for phone=${want} -> ${value}`, '', '');
+  }
+
   return changed;
 }
 
-// =============================================================================
-// UTILITY FUNCTIONS
-// =============================================================================
 
-/**
- * Normalize phone number to 10-digit format
- * Removes all non-digits and strips leading US country code
- * 
- * @param {string|number} v - Phone number in any format
- * @returns {string} 10-digit phone number
- */
 function normalizePhoneDigits_(v) {
   let d = String(v || '').replace(/[^\d]/g, '');
-  if (d.length === 11 && d.startsWith('1')) d = d.slice(1); // Drop leading US 1
+  if (d.length === 11 && d.startsWith('1')) d = d.slice(1); // drop leading US 1
   return d;
 }
 
-/**
- * Generate TwiML response for Twilio
- * 
- * @param {string} message - Optional message to include
- * @returns {GoogleAppsScript.Content.TextOutput} TwiML formatted response
- */
 function twiml_(message) {
   const xml = '<?xml version="1.0" encoding="UTF-8"?>' +
               '<Response>' +
@@ -144,41 +130,19 @@ function twiml_(message) {
   return ContentService.createTextOutput(xml).setMimeType(ContentService.MimeType.XML);
 }
 
-/**
- * Escape XML special characters
- * 
- * @param {string} s - String to escape
- * @returns {string} XML-escaped string
- */
 function escapeXml_(s) {
   return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    .replace(/'/g,'&apos;');
 }
 
-// =============================================================================
-// LOGGING
-// =============================================================================
-
-/**
- * Log all inbound webhook activity
- * Creates "SMS Log" sheet if it doesn't exist
- * 
- * @param {string} from - Sender phone number
- * @param {string} body - Message body
- * @param {string} status - Delivery status
- * @param {string} sid - Twilio message SID
- */
+// Simple inbound log (confirms webhook activity)
 function logInbound_(from, body, status, sid) {
   const ss = SpreadsheetApp.getActive();
   const sh = ss.getSheetByName('SMS Log') || ss.insertSheet('SMS Log');
-  
   if (sh.getLastRow() === 0) {
-    sh.appendRow(['Timestamp', 'Direction', 'From', 'Body', 'Status', 'MessageSid']);
+    sh.appendRow(['Timestamp','Direction','From','Body','Status','MessageSid']);
   }
-  
   sh.appendRow([new Date(), 'IN', from, body, status, sid]);
 }
