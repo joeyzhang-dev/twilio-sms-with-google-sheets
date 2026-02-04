@@ -19,29 +19,51 @@ function toE164_(digits) {
 function uiPing_() { return 'pong'; }
 
 // Send an SMS via Twilio REST API
+// Returns: { success: boolean, data?: object, error?: string, errorCode?: number }
 function sendSms_(toE164, body) {
   const { sid, token, msid, from } = twilioProps_();
-  if (!sid || !token) throw new Error('Missing Twilio credentials (SID/TOKEN). Add Script Properties.');
+  if (!sid || !token) {
+    return { success: false, error: 'Missing Twilio credentials (SID/TOKEN). Add Script Properties.' };
+  }
 
   const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
   const payload = { To: toE164, Body: body };
 
   if (msid) payload.MessagingServiceSid = msid;
   else if (from) payload.From = from;
-  else throw new Error('Provide TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER in Script Properties.');
+  else {
+    return { success: false, error: 'Provide TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER in Script Properties.' };
+  }
 
-  const resp = UrlFetchApp.fetch(url, {
-    method: 'post',
-    payload,
-    headers: { Authorization: 'Basic ' + Utilities.base64Encode(sid + ':' + token) },
-    muteHttpExceptions: true
-  });
+  try {
+    const resp = UrlFetchApp.fetch(url, {
+      method: 'post',
+      payload,
+      headers: { Authorization: 'Basic ' + Utilities.base64Encode(sid + ':' + token) },
+      muteHttpExceptions: true
+    });
 
-  const code = resp.getResponseCode();
-  const json = JSON.parse(resp.getContentText() || '{}');
-  logSms_(toE164, body, json.sid || '', code, json.error_message || json.message || '');
-  if (code < 200 || code >= 300) throw new Error('Twilio error: ' + (json.message || code));
-  return json;
+    const code = resp.getResponseCode();
+    const json = JSON.parse(resp.getContentText() || '{}');
+    
+    // Always log the attempt
+    logSms_(toE164, body, json.sid || '', code, json.error_message || json.message || '');
+    
+    // Return result object instead of throwing
+    if (code >= 200 && code < 300) {
+      return { success: true, data: json };
+    } else {
+      return { 
+        success: false, 
+        error: json.message || json.error_message || 'Unknown error',
+        errorCode: json.code || code
+      };
+    }
+  } catch (error) {
+    // Handle network or parsing errors
+    logSms_(toE164, body, '', 0, error.toString());
+    return { success: false, error: error.toString() };
+  }
 }
 
 /***** Simple SMS log sheet *****/
@@ -56,6 +78,12 @@ function logSms_(to, body, sid, httpCode, err) {
 
 function sendTestSingle() {
   const myPhone = '8162379012'; // your cell
-  sendSms_(toE164_(myPhone), 'Test from Google Sheets ✅ Reply STOP to opt out.');
+  const result = sendSms_(toE164_(myPhone), 'Test from Google Sheets ✅ Reply STOP to opt out.');
+  if (result.success) {
+    Logger.log('Test message sent successfully: ' + result.data.sid);
+  } else {
+    Logger.log('Test message failed: ' + result.error);
+  }
+  return result;
 }
 

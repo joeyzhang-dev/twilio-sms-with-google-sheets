@@ -229,7 +229,11 @@ function sendOneWithControls_(toPhoneE164, body) {
   if (isDryRun_()) {
     safeLogSms_(toPhoneE164, '[DRY RUN] ' + body, 'DRYRUN', 0, '');
   } else {
-    sendSms_(toPhoneE164, body);
+    const result = sendSms_(toPhoneE164, body);
+    // Don't throw on error - just log it and continue
+    if (!result.success) {
+      Logger.log(`Send failed to ${toPhoneE164}: ${result.error} (code: ${result.errorCode || 'unknown'})`);
+    }
   }
   if (delay > 0) Utilities.sleep(delay);
 }

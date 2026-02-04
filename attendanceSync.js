@@ -134,7 +134,10 @@ if (existingRowEntry) {
   if (incomingOptYes && prevOpt !== 'yes') {
     const phone = updated['Phone #'];
     if (phone) {
-      sendSms_(toE164_(phone), 'Thanks for opting in to Progsu SMS alerts! Cool events are coming your way. Reply STOP to opt out. Reply HELP for help.');
+      const result = sendSms_(toE164_(phone), 'Thanks for opting in to Progsu SMS alerts! Cool events are coming your way. Reply STOP to opt out. Reply HELP for help.');
+      if (!result.success) {
+        Logger.log(`Failed to send opt-in confirmation to ${phone}: ${result.error}`);
+      }
     }
   }
 }
@@ -167,7 +170,10 @@ if (existingRowEntry) {
         if (incomingOptYes) {
           const phone = newObj['Phone #'];
           if (phone) {
-            sendSms_(toE164_(phone), 'Thanks for opting in to Progsu SMS alerts! Cool events are coming your way. Reply STOP to opt out. Reply HELP for help.');
+            const result = sendSms_(toE164_(phone), 'Thanks for opting in to Progsu SMS alerts! Cool events are coming your way. Reply STOP to opt out. Reply HELP for help.');
+            if (!result.success) {
+              Logger.log(`Failed to send opt-in confirmation to ${phone}: ${result.error}`);
+            }
           }
         }
       }
